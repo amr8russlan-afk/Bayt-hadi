@@ -230,9 +230,39 @@ details.add summary { cursor: pointer; min-height: 48px; display: flex; align-it
 <meta name="apple-mobile-web-app-title" content="بيتنا هادي">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#FCF1EC">
+
+<style>
+#bh-auth{position:fixed;inset:0;z-index:99999;background:#fcf1ec;display:flex;align-items:center;justify-content:center;padding:22px;font-family:inherit;direction:rtl}
+#bh-auth .bh-card{width:min(100%,420px);background:#fff;border:1px solid #eadbd5;border-radius:24px;padding:26px;box-shadow:0 12px 40px #7b55441a;text-align:center}
+#bh-auth h2{margin:0 0 8px;color:#765b5c;font-size:24px}
+#bh-auth p{color:#826f6d;line-height:1.7;margin:0 0 18px}
+#bh-auth input{display:block;width:100%;box-sizing:border-box;padding:13px 14px;border:1px solid #e4d4ce;border-radius:12px;margin:10px 0;font:inherit;background:#fff}
+#bh-auth button{width:100%;padding:13px;border:0;border-radius:12px;background:#b77f87;color:#fff;font:inherit;font-weight:700;margin-top:10px;cursor:pointer}
+#bh-auth button.secondary{background:#f5e9e6;color:#765b5c}
+#bh-auth .bh-msg{font-size:13px;min-height:24px;margin-top:12px}
+#bh-auth .bh-small{font-size:12px;margin-top:14px}
+</style>
+
 </head>
 <body>
 
+
+
+<div id="bh-auth">
+ <div class="bh-card">
+  <div style="font-size:42px;margin-bottom:8px">🏡</div>
+  <h2>بيت هادي</h2>
+  <p>سجّلوا الدخول بنفس الإيميل على الجهازين علشان بيانات البيت تتزامن تلقائيًا.</p>
+  <form id="bh-login-form">
+   <input id="bh-email" type="email" autocomplete="email" placeholder="الإيميل المشترك" required>
+   <input id="bh-password" type="password" autocomplete="current-password" placeholder="كلمة المرور" minlength="6" required>
+   <button id="bh-submit" type="submit">دخول</button>
+  </form>
+  <button id="bh-signup" class="secondary" type="button">إنشاء الحساب لأول مرة</button>
+  <div id="bh-auth-msg" class="bh-msg" role="status"></div>
+  <div class="bh-small">استخدموا نفس الحساب على موبايلك وموبايل زوجك.</div>
+ </div>
+</div>
 
 <div class="app" lang="ar">
   <header class="hero">
@@ -302,7 +332,9 @@ details.add summary { cursor: pointer; min-height: 48px; display: flex; align-it
 
 <nav class="bnav" id="bnav" aria-label="تنقل سريع"><div class="in" id="bnav-in"></div></nav>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+// BAYT_HADI_CLOUD_SYNC_V1
 (function () {
   var KEY = 'bayt-hadi-v1';
   var SITS = [
@@ -516,11 +548,78 @@ details.add summary { cursor: pointer; min-height: 48px; display: flex; align-it
     state.cv = 1;
   }
   var saveOk = true;
+  var bhSupabase = null, bhUser = null, bhChannel = null, bhReady = false, bhSaving = false, bhSaveTimer = null;
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); saveOk = true; } catch (e) { saveOk = false; }
     var note = document.getElementById('saved-note');
-    note.textContent = saveOk ? 'الحالة بتتحفظ على الجهاز ده وبتبدأ من جديد كل يوم.' : 'المتصفح مش بيسمح بالحفظ، فالتقدم هيضيع لو قفلتي الصفحة.';
+    note.textContent = bhUser ? 'بيانات البيت محفوظة على الإنترنت وبتتزامن بين الجهازين.' : (saveOk ? 'الحالة بتتحفظ على الجهاز ده.' : 'المتصفح مش بيسمح بالحفظ.');
+    if (bhUser && bhReady && !bhSaving) {
+      clearTimeout(bhSaveTimer);
+      bhSaveTimer = setTimeout(async function () {
+        try {
+          await bhSupabase.from('family_state').upsert({user_id:bhUser.id,data:state,updated_at:new Date().toISOString()},{onConflict:'user_id'});
+          note.textContent='تم حفظ التغييرات ومزامنتها ❤️';
+        } catch(e) { note.textContent='تعذر رفع التحديث للسحابة؛ سيظل محفوظًا على هذا الجهاز مؤقتًا.'; }
+      },450);
+    }
   }
+  function bhMessage(t){var n=document.getElementById('bh-auth-msg');if(n)n.textContent=t;}
+  async function bhStartSession(session){
+    bhUser=session.user;
+    document.getElementById('bh-auth').style.display='none';
+    var remote=await bhSupabase.from('family_state').select('data').eq('user_id',bhUser.id).maybeSingle();
+    if(remote.error) throw remote.error;
+    if(remote.data && remote.data.data && typeof remote.data.data==='object'){
+      state=remote.data.data;
+      localStorage.setItem(KEY,JSON.stringify(state));
+    } else {
+      var local=localStorage.getItem(KEY);
+      if(local){try{state=JSON.parse(local);}catch(e){}}
+      await bhSupabase.from('family_state').upsert({user_id:bhUser.id,data:state,updated_at:new Date().toISOString()},{onConflict:'user_id'});
+    }
+    bhReady=true;
+    render();
+    if(bhChannel) await bhSupabase.removeChannel(bhChannel);
+    bhChannel=bhSupabase.channel('bayt-hadi-family-state')
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'family_state',filter:'user_id=eq.'+bhUser.id},function(payload){
+        if(!payload.new || !payload.new.data) return;
+        bhSaving=true;
+        state=payload.new.data;
+        try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
+        render();
+        bhSaving=false;
+        var note=document.getElementById('saved-note');if(note)note.textContent='تم استلام تحديث من الجهاز الآخر ❤️';
+      }).subscribe();
+  }
+  async function bhInit(){
+    if(!window.supabase || !window.supabase.createClient){bhMessage('تعذر تحميل خدمة المزامنة. حدّثي الصفحة وحاولي تاني.');return;}
+    bhSupabase=window.supabase.createClient('https://qirqossbajewpidzpcly.supabase.co','sb_publishable_cxd772IlOgR_AdT0I9l-iw_r8WUfaik');
+    var form=document.getElementById('bh-login-form');
+    form.addEventListener('submit',async function(e){
+      e.preventDefault();var email=document.getElementById('bh-email').value.trim(),password=document.getElementById('bh-password').value;
+      document.getElementById('bh-submit').disabled=true;bhMessage('جاري تسجيل الدخول...');
+      try{var r=await bhSupabase.auth.signInWithPassword({email,password});if(r.error)throw r.error;await bhStartSession(r.data.session);}
+      catch(err){bhMessage(err.message==='Invalid login credentials'?'الإيميل أو كلمة المرور غير صحيحة. لو دي أول مرة، اختاري إنشاء الحساب.':(err.message||'حصلت مشكلة في الدخول.'));}
+      finally{document.getElementById('bh-submit').disabled=false;}
+    });
+    document.getElementById('bh-signup').addEventListener('click',async function(){
+      var email=document.getElementById('bh-email').value.trim(),password=document.getElementById('bh-password').value;
+      if(!email||password.length<6){bhMessage('اكتبي الإيميل وكلمة مرور ٦ أحرف على الأقل الأول.');return;}
+      bhMessage('جاري إنشاء الحساب...');
+      var r=await bhSupabase.auth.signUp({email,password});
+      if(r.error){bhMessage(r.error.message);return;}
+      if(r.data.session){await bhStartSession(r.data.session);}
+      else{bhMessage('تم إنشاء الحساب. افتحي رسالة التأكيد اللي وصلت للإيميل، وبعدها ارجعي وسجّلي الدخول.');}
+    });
+    var current=await bhSupabase.auth.getSession();
+    if(current.data.session){try{await bhStartSession(current.data.session);}catch(e){bhMessage('تعذر تحميل بيانات الأسرة: '+e.message);}}
+    bhSupabase.auth.onAuthStateChange(function(event,session){
+      if(event==='SIGNED_IN' && session && !bhReady){setTimeout(function(){bhStartSession(session).catch(function(e){bhMessage(e.message);});},0);}
+      if(event==='SIGNED_OUT'){bhReady=false;bhUser=null;document.getElementById('bh-auth').style.display='flex';}
+    });
+  }
+  bhInit();
+
   // keep only the last 14 days of history
   (function prune() {
     var keys = Object.keys(state.done).sort();
