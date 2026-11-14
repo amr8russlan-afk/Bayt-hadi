@@ -557,7 +557,8 @@ details.add summary { cursor: pointer; min-height: 48px; display: flex; align-it
       clearTimeout(bhSaveTimer);
       bhSaveTimer = setTimeout(async function () {
         try {
-          await bhSupabase.from('family_state').upsert({user_id:bhUser.id,data:state,updated_at:new Date().toISOString()},{onConflict:'user_id'});
+          var uploaded=await bhSupabase.from('family_state').upsert({user_id:bhUser.id,data:state,updated_at:new Date().toISOString()},{onConflict:'user_id'});
+          if(uploaded.error) throw uploaded.error;
           note.textContent='تم حفظ التغييرات ومزامنتها ❤️';
         } catch(e) { note.textContent='تعذر رفع التحديث للسحابة؛ سيظل محفوظًا على هذا الجهاز مؤقتًا.'; }
       },450);
